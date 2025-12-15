@@ -1,0 +1,1475 @@
+---
+title: "Sealice microbiome"
+author: "Bela Klimesova"
+date: "2025-12-12"
+output:
+  bookdown::pdf_document2:
+    latex_engine: xelatex
+fig_caption: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+options(warn=-1)
+```
+
+# Loading microbiome datasets
+
+```{r}
+library(phyloseq)
+library(ggplot2)
+suppressMessages(library(vegan))
+suppressMessages(library(microbiomeMarker))
+library(agricolae)
+suppressMessages(library(tidyverse))
+library(patchwork)
+suppressMessages(library(ggvenn))
+```
+
+Data loading: Microbiome read count data
+
+```{r}
+Sequen<-read.table("Sealice_Microbiome_Reads.csv",
+	header = TRUE,sep = ',',fill = TRUE,dec = ".",na.strings = "NA")
+```
+
+Adjustment of dataset and devision to Illumina and Nanopore data
+
+```{r}
+rownames(Sequen)<-Sequen[,1]
+Sequen[,1]<- NULL
+
+Sequen_t<-t(Sequen)
+
+Illumina<-Sequen[,c(1:20)]
+Nanopore<-Sequen[,c(21:40)]
+```
+
+Data loading: Microbiome metadata
+
+```{r}
+sample<-read.csv("Sealice_Microbiome_Metadata.txt",header=T,row.names=1,sep = "\t")
+```
+
+Adjustment of dataset and devision to Illumina and Nanopore data
+
+```{r}
+sample$time<-rep(c(rep('February',5),rep('March',5),rep('April',5),rep('May',5)),2)
+sample$platform<-c(rep('Illumina',20),rep('Nanopore',20))
+
+Ill_sample<-sample[sample$platform=='Illumina',]
+Nan_sample<-sample[sample$platform=='Nanopore',]
+```
+
+Data loading: Microbiome taxonomy data
+
+```{r}
+observation<-read.csv("Sealice_Microbiome_Taxonomy.tsv",header=T,row.names=1, sep = "\t")
+```
+
+# Dataset format adjustment
+
+Discarding global singletons in all three datasets (Illumina, Nanopore, Overall)
+
+```{r}
+Singletons<-names(apply(Illumina,1,sum)[apply(Illumina,1,sum)<2])
+Illumina_1<-Illumina[!(rownames(Illumina)%in% Singletons),]
+
+Singletons<-names(apply(Nanopore,1,sum)[apply(Nanopore,1,sum)<2])
+Nanopore_1<-Nanopore[!(rownames(Nanopore)%in% Singletons),]
+
+Singletons<-names(apply(Sequen,1,sum)[apply(Sequen,1,sum)<2])
+Sequen_1<-Sequen[!(rownames(Sequen)%in% Singletons),]
+```
+
+Data to phyloseq format
+
+Illumina
+```{r}
+OTU1 = otu_table(as.matrix(t(Illumina_1)), taxa_are_rows = FALSE) 
+SAM1 = sample_data(Ill_sample, errorIfNULL = TRUE) 
+TAX1 = tax_table(as.matrix(observation))
+Ill_phylo <- phyloseq(OTU1, TAX1, SAM1)
+```
+Nanopore
+```{r}
+OTU2 = otu_table(as.matrix(t(Nanopore_1)), taxa_are_rows = FALSE) 
+SAM2 = sample_data(Nan_sample, errorIfNULL = TRUE) 
+TAX2 = tax_table(as.matrix(observation))
+Nan_phylo <- phyloseq(OTU2, TAX2, SAM2)
+```
+Overall
+```{r}
+OTU = otu_table(as.matrix(t(Sequen)), taxa_are_rows = FALSE) 
+SAM = sample_data(sample, errorIfNULL = TRUE) 
+TAX = tax_table(as.matrix(observation))
+phylo <- phyloseq(OTU, TAX, SAM)
+```
+
+# Data analysis
+
+# Rarefaction curves
+
+Adjustment of data fortmat
+```{r}
+Illumina_t <- t(Illumina_1)
+Nanopore_t <- t(Nanopore_1)
+```
+
+Names of samples and matching colors
+```{r}
+leg.txt <- c(paste0(1:5,'_Feb'),paste0(1:5,'_Mar'),
+		paste0(1:5,'_Apr'),paste0(1:5,'_May'))
+col_vector <- c("#661100","#7F261D","#993B3B","#B25059","#CC6677",
+		    "#DDCC77","#AAB666","#77A155","#438C44","#117733",
+		    "#88CCEE","#72A1D4","#5D77BB","#484CA1","#332288",
+		    "#44AA99","#55A194","#669990","#77908C","#888888")
+```
+
+Figure of rarefaction curves
+```{r fig1, fig.cap="Rarefaction curve"}
+layout(matrix(c(1,2,3,3), nrow = 2, byrow = TRUE),
+       heights = c(3, 1))  # top row bigger than bottom
+
+par(mar = c(5, 4, 4, 2), cex = 1, las = 1)
+
+# Illumina
+rarecurve(Illumina_t, 
+          step = 100, lwd = 2, cex = 0.8, 
+          xlab = "Number of reads", 
+          ylab = "Number of OTU observed",
+          ylim = c(1, 350), xlim = c(1, 250000),
+          col = col_vector, size = 1.5, 
+          label = FALSE, main = "A) Illumina")
+
+# Nanopore
+rarecurve(Nanopore_t, 
+          step = 100, lwd = 2, cex = 0.8, 
+          xlab = "Number of reads", 
+          ylab = "Number of OTU observed",
+          ylim = c(1, 350), xlim = c(1, 250000),
+          col = col_vector, size = 1.5, 
+          label = FALSE, main = "B) Nanopore")
+
+par(mar = c(0, 0, 0, 0))
+plot.new()
+legend("center",
+       legend = leg.txt, lwd = 2, col = col_vector,
+       box.lwd = 0.6, cex = 1.0, ncol = 5) 
+```
+
+Determination of sequencing depth
+
+Illumina
+```{r}
+sum_seq <- colSums(Illumina)
+range(sum_seq)
+sum(sum_seq)
+mean(sum_seq)
+sd(sum_seq)
+```
+
+Nanopore
+```{r}
+sum_seq <- colSums(Nanopore)
+range(sum_seq)
+sum(sum_seq)
+mean(sum_seq)
+sd(sum_seq)
+```
+# Alpha diversity and richness
+
+Calculation of alpha diversity
+
+Illumina
+```{r}
+data_richness <- estimateR(Illumina_t)
+data_evenness <- diversity(Illumina_t) / log(specnumber(Illumina_t))
+data_shannon <- diversity(Illumina_t, index = "shannon")
+data_simpson <- diversity(Illumina_t, index = "simpson")
+data_alphadiv1 <- cbind(Ill_sample, t(data_richness), data_shannon, 
+                        data_simpson, data_evenness)
+```
+
+Nanopore
+```{r}
+data_richness <- estimateR(Nanopore_t)
+data_evenness <- diversity(Nanopore_t) / log(specnumber(Nanopore_t))
+data_shannon <- diversity(Nanopore_t, index = "shannon")
+data_simpson <- diversity(Nanopore_t, index = "simpson")
+data_alphadiv2 <- cbind(Nan_sample, t(data_richness), data_shannon,
+                        data_simpson, data_evenness)
+```
+
+Combining dataset
+```{r}
+data_alphadiv<-rbind(as.data.frame(data_alphadiv1),as.data.frame(data_alphadiv2))
+data_alphadiv$time<-factor(data_alphadiv$time,levels=c('February','March','April','May'))
+```
+
+## Shannon index
+
+Test normal distribution
+```{r}
+shapiro.test(data_alphadiv1$data_shannon)
+shapiro.test(data_alphadiv2$data_shannon)
+```
+
+ANOVA test to assess differences
+```{r}
+aov_test1<-aov(data_shannon ~ time, data = data_alphadiv1)
+summary(aov_test1)
+
+aov_test2<-aov(data_shannon ~ time, data = data_alphadiv2)
+summary(aov_test2)
+```
+
+Post-hoc Tukey test
+```{r}
+hsd_test1 <- TukeyHSD(aov_test1)  
+hsd_res1 <- HSD.test(aov_test1, "time", group=T)$groups  
+hsd_res1 
+
+hsd_test2 <- TukeyHSD(aov_test2)  
+hsd_res2 <- HSD.test(aov_test2, "time", group=T)$groups  
+hsd_res2 
+```
+
+Preparation of data for plotting
+```{r}
+summary_data <- data_alphadiv %>%
+  group_by(time, platform) %>%
+  summarise(mean = mean(data_shannon, na.rm = TRUE),
+            sd = sd(data_shannon, na.rm = TRUE),
+            .groups = 'drop')
+
+label_data <- summary_data %>%
+  mutate(label = c("a", "ab", "a", "b", "b", "c", "ab", "bc"),  
+         y = mean + sd + 0.15) 
+```
+
+Figure of Shannon index
+```{r}
+P1 <- ggplot(data_alphadiv, aes(x = time, y = data_shannon, fill = time,alpha=0.5)) +
+	geom_errorbar(data = summary_data,
+                aes(x = time, ymin = mean - sd, ymax = mean + sd, group = platform),
+                position = position_dodge(width = 0.75),
+                width = 0.2,
+                color = "black",
+                inherit.aes = FALSE)+
+	geom_text(data = label_data,
+            aes(x = time, y = y, label = label,group = platform),
+            position = position_dodge(width = 0.75),
+            inherit.aes = FALSE,
+            size = 4) +
+	geom_boxplot(position = position_dodge(width = 0.75), coef = 0,outlier.shape = NA) +
+	scale_fill_manual(values = c("#CC6677","#DDCC77","#117733","#332288")) +
+	scale_color_manual(values = c("#CC6677","#DDCC77","#117733","#332288")) +
+	labs(title = 'A)  Shannon index', x= ' ', y= '') +
+	theme_minimal()+
+	facet_wrap(~platform)+
+	theme(legend.position="none",
+	axis.text.x = element_text(angle = 90, hjust = 1))
+```
+
+## Simpson index
+
+Test normal distribution
+```{r}
+shapiro.test(data_alphadiv1$data_simpson)
+shapiro.test(data_alphadiv2$data_simpson)
+```
+
+ANOVA test to assess differences
+```{r}
+aov_test1<-aov(data_simpson ~ time, data = data_alphadiv1)
+summary(aov_test1)
+
+aov_test2<-aov(data_simpson ~ time, data = data_alphadiv2)
+summary(aov_test2)
+```
+
+Post-hoc Tukey test
+```{r}
+hsd_test1 <- TukeyHSD(aov_test1)  
+hsd_res1 <- HSD.test(aov_test1, "time", group=T)$groups  
+hsd_res1 
+
+hsd_test2 <- TukeyHSD(aov_test2) 
+hsd_res2 <- HSD.test(aov_test2, "time", group=T)$groups  
+hsd_res2 
+```
+
+Preparation of data for plotting
+```{r}
+summary_data <- data_alphadiv %>%
+  group_by(time, platform) %>%
+  summarise(mean = mean(data_simpson, na.rm = TRUE),
+            sd = sd(data_simpson, na.rm = TRUE),
+            .groups = 'drop')
+
+label_data <- summary_data %>%
+  mutate(label = c("ab", "ab", "a", "a", "b", "b", "b", "b"),  
+         y = mean + sd + 0.05) 
+```
+
+Figure of Simpson index
+```{r}
+P2 <- ggplot(data_alphadiv, aes(x = time, y = data_simpson, fill = time,alpha=0.5)) +
+  geom_errorbar(data = summary_data,
+                aes(x = time, ymin = mean - sd, ymax = mean + sd, group = platform),
+                position = position_dodge(width = 0.75),
+                width = 0.2,
+                color = "black",
+                inherit.aes = FALSE)+
+  geom_text(data = label_data,
+            aes(x = time, y = y, label = label,group = platform),
+            position = position_dodge(width = 0.75),
+            inherit.aes = FALSE,
+            size = 4) +
+  geom_boxplot(position = position_dodge(width = 0.75), coef = 0,outlier.shape = NA) +
+	scale_fill_manual(values = c("#CC6677","#DDCC77","#117733","#332288")) +
+	scale_color_manual(values = c("#CC6677","#DDCC77","#117733","#332288")) +
+  labs(title = 'B)  Simpson index', x= ' ', y= '') +
+  theme_minimal()+
+	facet_wrap(~platform)+
+	theme(legend.position="none",
+	axis.text.x = element_text(angle = 90, hjust = 1))
+```
+
+## Observed richness
+
+Test normal distribution
+```{r}
+shapiro.test(data_alphadiv1$S.obs)
+shapiro.test(data_alphadiv2$S.obs)
+```
+
+ANOVA and Kruskal test to assess differences
+```{r}
+Krus<-kruskal.test(S.obs ~ time, data = data_alphadiv1)
+pairwise.wilcox.test(data_alphadiv1$S.obs,data_alphadiv1$time,
+                 p.adjust.method = "BH")
+aov_test2<-aov(S.obs ~ time, data = data_alphadiv2)
+summary(aov_test2)
+```
+
+Preparation of data for plotting
+```{r}
+summary_data <- data_alphadiv %>%
+  group_by(time, platform) %>%
+  summarise(mean = mean(S.obs, na.rm = TRUE),
+            sd = sd(S.obs, na.rm = TRUE),
+            .groups = 'drop')
+```
+
+Figure of observed richness
+```{r}
+P3 <- ggplot(data_alphadiv, aes(x = time, y = S.obs, fill = time,alpha=0.5)) +
+  geom_errorbar(data = summary_data,
+                aes(x = time, ymin = mean - sd, ymax = mean + sd, group = platform),
+                position = position_dodge(width = 0.75),
+                width = 0.2,
+                color = "black",
+                inherit.aes = FALSE) +
+  geom_boxplot(position = position_dodge(width = 0.75), coef = 0,outlier.shape = NA) +
+	scale_fill_manual(values = c("#CC6677","#DDCC77","#117733","#332288")) +
+	scale_color_manual(values = c("#CC6677","#DDCC77","#117733","#332288")) +
+  labs(title = 'C)   Observed richness', x = '', y = '') +
+  theme_minimal()+
+	facet_wrap(~platform)+
+	theme(legend.position="none",
+	axis.text.x = element_text(angle = 90, hjust = 1))
+```
+
+## ACE
+
+Test normal distribution
+```{r}
+shapiro.test(data_alphadiv1$S.ACE)
+shapiro.test(data_alphadiv2$S.ACE)
+```
+
+ANOVA test to assess differences
+```{r}
+aov_test1<-aov(S.ACE ~ time, data = data_alphadiv1)
+summary(aov_test1)
+
+aov_test2<-aov(S.ACE ~ time, data = data_alphadiv2)
+summary(aov_test2)
+```
+
+Post-hoc Tukey test
+```{r}
+hsd_test1 <- TukeyHSD(aov_test1) 
+hsd_res1 <- HSD.test(aov_test1, "time", group=T)$groups  
+hsd_res1 
+
+hsd_test2 <- TukeyHSD(aov_test2) 
+hsd_res2 <- HSD.test(aov_test2, "time", group=T)$groups  
+hsd_res2
+```
+
+Preparation of data for plotting
+```{r}
+summary_data <- data_alphadiv %>%
+  group_by(time, platform) %>%
+  summarise(mean = mean(S.ACE, na.rm = TRUE),
+            sd = sd(S.ACE, na.rm = TRUE),
+            .groups = 'drop')
+
+label_data <- summary_data %>%
+  mutate(label = c("ab", "", "ab", "", "a", "", "b", ""),  
+         y = mean + sd + 40) 
+```
+
+Figure of ACE
+```{r}
+P4 <- ggplot(data_alphadiv, aes(x = time, y = S.ACE, fill = time,alpha=0.5)) +
+  geom_errorbar(data = summary_data,
+                aes(x = time, ymin = mean - sd, ymax = mean + sd, group = platform),
+                position = position_dodge(width = 0.75),
+                width = 0.2,
+                color = "black",
+                inherit.aes = FALSE) +
+  geom_text(data = label_data,
+            aes(x = time, y = y, label = label,group = time),
+            position = position_dodge(width = 0.75),
+            inherit.aes = FALSE,
+            size = 4) +
+  geom_boxplot(position = position_dodge(width = 0.75), coef = 0,outlier.shape = NA) +
+	scale_fill_manual(values = c("#CC6677","#DDCC77","#117733","#332288")) +
+	scale_color_manual(values = c("#CC6677","#DDCC77","#117733","#332288")) +
+  labs(title = 'D)   ACE', x = '', y = '') +
+  theme_minimal()+
+  facet_wrap(~platform)+
+	theme(legend.position="none",
+	axis.text.x = element_text(angle = 90, hjust = 1))
+```
+
+Combined plot of richness and diversity
+```{r fig2, fig.cap="Diversity and richness"}
+((P1 | P2)/(P3 | P4)) 
+```
+
+# Data normalization = calculation of abundance
+```{r}
+Ill_phylo_norm <- transform_sample_counts(Ill_phylo, function(ASV) ASV/sum(ASV) *100 )
+Nan_phylo_norm <- transform_sample_counts(Nan_phylo, function(ASV) ASV/sum(ASV) *100 )
+phylo_norm <- transform_sample_counts(phylo, function(ASV) ASV/sum(ASV) *100 )
+```
+
+# Data filtering
+Keep only taxa (columns) where at least one sample has ≥ 0.03 abundance
+
+```{r}
+threshold <- 0.03
+```
+
+Illumina
+```{r}
+Ill_atu_filt <- otu_table(Ill_phylo_norm)[, colSums(otu_table(Ill_phylo_norm) 
+                                                    >= threshold) > 0]
+ncol(Ill_atu_filt)
+ncol(otu_table(Ill_phylo_norm))
+```
+
+Nanopore
+```{r}
+Nan_atu_filt <- otu_table(Nan_phylo_norm)[, colSums(otu_table(Nan_phylo_norm) 
+                                                    >= threshold) > 0]
+ncol(Nan_atu_filt)
+ncol(otu_table(Nan_phylo_norm))
+```
+
+Overall
+```{r}
+atu_filt <- otu_table(phylo_norm)[, colSums(otu_table(phylo_norm) 
+                                            >= threshold) > 0]
+ncol(atu_filt)
+ncol(otu_table(phylo_norm))
+```
+
+Overview of detected taxonomical groups
+Illumina
+```{r}
+Names<-colnames(Ill_atu_filt)
+Selec<-data.frame(TAX1[rownames(TAX1) %in% Names,])
+
+length(unique(Selec$Phylum))
+length(unique(Selec$Class))
+length(unique(Selec$Order))
+```
+
+Nanopore
+```{r}
+Names<-colnames(Nan_atu_filt)
+Selec<-data.frame(TAX2[rownames(TAX2) %in% Names,])
+
+length(unique(Selec$Phylum))
+length(unique(Selec$Class))
+length(unique(Selec$Order))
+```
+
+# Beta diversity
+
+```{r}
+set.seed(1782)
+```
+
+Changing the format of data
+```{r}
+SAM1$grouping<-c(rep('Feb and Mar',10),rep('Apr and May',10))
+Ill_phylo_filt_1 <- phyloseq(otu_table(Ill_atu_filt), TAX1, SAM1)
+
+SAM2$grouping<-c(rep('Feb and Mar',10),rep('Apr and May',10))
+Nan_phylo_filt_1 <- phyloseq(otu_table(Nan_atu_filt), TAX2, SAM2)
+phylo_filt_1 <- phyloseq(otu_table(atu_filt), TAX, SAM)
+```
+
+Principal coordinate analysis
+
+Illumina
+```{r}
+pcoa_bc1 = ordinate(Ill_phylo_filt_1, "PCoA", "bray")
+P1<-plot_ordination(Ill_phylo_filt_1, pcoa_bc1, color = "time") + 
+	geom_point(size = 3,alpha=0.5) +
+	theme_minimal()+
+	scale_color_manual(values=c("#CC6677","#DDCC77","#117733","#332288"),
+		breaks = c('February','March','April','May'))+
+	labs(title = 'A)   Illumina', x= 'Component [40.6%]',
+		y= 'Component [20.8%]') +
+	theme(text = element_text(size = 13))+
+  stat_ellipse(aes(group = grouping), linetype = 2,alpha=0.5)
+```
+
+Nanopore
+```{r}
+pcoa_bc2 = ordinate(Nan_phylo_filt_1, "PCoA", "bray") 
+P2<-plot_ordination(Nan_phylo_filt_1, pcoa_bc2, color = "time") + 
+	geom_point(size = 3,alpha=0.5) +
+	theme_minimal()+
+	scale_color_manual(values=c("#CC6677","#DDCC77","#117733","#332288"),
+		breaks = c('February','March','April','May'))+
+	labs(title = 'B)   Nanopore', x= 'Component [51.3%]',
+		y= 'Component [22.7%]')+
+	theme(text = element_text(size = 13)) +
+  stat_ellipse(aes(group = grouping), linetype = 2,alpha=0.5)
+```
+
+Combining of figures for beta diversity
+```{r fig3, fig.cap="Beta-diversity: PCoA"}
+((P1 | P2 ))  +
+  plot_layout(guides = "collect") &
+  theme(legend.position = "bottom")
+```
+
+Testing differences between months with PERMANOVA
+Illumina
+```{r}
+adonis2(Ill_atu_filt~time,data=Ill_sample, permutations=9999, method="bray")
+```
+
+Nanopore
+```{r}
+adonis2(Nan_atu_filt~time,data=Nan_sample, permutations=9999, method="bray")
+```
+
+# Microbiome composition: phylum level
+
+Adjusting format of data
+```{r}
+observation$SampleID<-rownames(observation)
+```
+
+Illumina
+```{r}
+Ill_atu_filt_rar<-data.frame(t(Ill_atu_filt))
+Ill_atu_filt_rar$SampleID<-rownames(Ill_atu_filt_rar)
+```
+
+Nanopore
+```{r}
+Nan_atu_filt_rar<-data.frame(t(Nan_atu_filt))
+Nan_atu_filt_rar$SampleID<-rownames(Nan_atu_filt_rar)
+```
+
+Overall
+```{r}
+atu_filt_rar<-data.frame(t(atu_filt))
+atu_filt_rar$SampleID<-rownames(atu_filt_rar)
+```
+
+Merging datasets
+```{r}
+Tax_Data1<-merge(Ill_atu_filt_rar,observation,all.x=TRUE,by='SampleID')
+colnames(Tax_Data1)[2:21]<-paste0(rep(c(1:5),4),'_',sample$time[1:20])
+
+Tax_Data2<-merge(Nan_atu_filt_rar,observation,all.x=TRUE,by='SampleID')
+colnames(Tax_Data2)[2:21]<-paste0(rep(c(1:5),4),'_',sample$time[1:20])
+
+Tax_Data<-merge(atu_filt_rar,observation,all.x=TRUE,by='SampleID')
+```
+
+Sum per Phyla
+```{r}
+Tax_Phylum1<- aggregate(Tax_Data1[,2:21],by=list(Phylum=Tax_Data1$Phylum), sum)
+Tax_Phylum1$Phylum<-substr(Tax_Phylum1$Phylum,4,40)
+
+Tax_Phylum2<- aggregate(Tax_Data2[,2:21],by=list(Phylum=Tax_Data2$Phylum), sum)
+Tax_Phylum2$Phylum<-substr(Tax_Phylum2$Phylum,4,40)
+```
+
+Tidying datasets
+Illumina
+```{r}
+Tax_Phylum1<-data.frame(t(Tax_Phylum1))
+colnames(Tax_Phylum1)<-Tax_Phylum1[1,]
+Tax_Phylum1<-Tax_Phylum1[2:21,]
+Tax_Phylum1$month<-substr(rownames(Tax_Phylum1),3,10)
+Tax_Phylum1$Sample_ID<-rownames(Tax_Phylum1)
+Tax_Phylum1$Sample_ID<-paste0(rep(1:5,4),'_',rep(c('Feb','Mar','Apr','May'),each=5))
+
+Tax_Phyll<- gather(Tax_Phylum1,Phylums,Abundance,
+                   Actinomycetota:Verrucomicrobiota, factor_key=TRUE)
+Tax_Phyll$Abundance_r<-round(as.numeric(Tax_Phyll$Abundance),2)
+```
+
+Nanopore
+```{r}
+Tax_Phylum2<-data.frame(t(Tax_Phylum2))
+colnames(Tax_Phylum2)<-Tax_Phylum2[1,]
+Tax_Phylum2<-Tax_Phylum2[2:21,]
+Tax_Phylum2$month<-substr(rownames(Tax_Phylum2),3,10)
+Tax_Phylum2$Sample_ID<-rownames(Tax_Phylum2)
+Tax_Phylum2$Sample_ID<-paste0(rep(1:5,4),'_',rep(c('Feb','Mar','Apr','May'),each=5))
+
+Tax_Phyl2<- gather(Tax_Phylum2,Phylums,Abundance,
+                   Bacillota:Verrucomicrobiota, factor_key=TRUE)
+Tax_Phyl2$Abundance_r<-round(as.numeric(Tax_Phyl2$Abundance),2)
+```
+
+Filtering: phyla with abundance lower than 0.5% described as others
+```{r}
+Tax_Phyll$Phylum<-as.vector(Tax_Phyll$Phylums)
+Tax_Phyll[Tax_Phyll$Abundance_r<0.5,]$Phylum<-'Others'
+
+Tax_Phyl2$Phylum<-as.vector(Tax_Phyl2$Phylums)
+Tax_Phyl2[Tax_Phyl2$Abundance_r<0.5,]$Phylum<-'Others'
+```
+
+Combining datasets
+```{r}
+Tax_Phyll$platform<-'Illumina'
+Tax_Phyl2$platform<-'Nanopore'
+Tax_Phyl<-rbind(Tax_Phyll,Tax_Phyl2)
+```
+
+Adjustment of final dataset
+```{r}
+Tax_Phyl_N<-aggregate(Tax_Phyl$Abundance_r,list(month=Tax_Phyl$month,
+			Phylum=Tax_Phyl$Phylum,
+			platform=Tax_Phyl$platform),mean)
+Tax_Phyl_N$month<-factor(Tax_Phyl_N$month,levels = c('February','March','April','May'))
+
+sort(tapply(Tax_Phyl_N$x,Tax_Phyl_N$Phylum,sum))
+Tax_Phyl_N$Phylum<-factor(Tax_Phyl_N$Phylum,
+	levels = c("Myxococcota",'Others','Bacillota',"Thermodesulfobacteriota",
+	"Bdellovibrionota","Cyanobacteriota",'Patescibacteria',"Campylobacterota",
+	"Verrucomicrobiota","Bacteroidota","Pseudomonadota"))
+```
+
+Figure of bacterial compositon at phylum level
+```{r}
+P_Phyl<-ggplot(Tax_Phyl_N,aes(x = month, y = x, fill = Phylum)) +
+  geom_bar(position = "fill", stat = "identity") +
+  scale_fill_manual(values = c("#888888","#44AA99","#882255","#6699CC",
+	"#999933","#AA4499","#88CCEE","#332288","#117733","#CC6677","#DDCC77")) +
+  labs(title= 'A)', x= 'Month', 
+	y= 'Proportion of the total abundance')+
+	facet_wrap(~platform) +
+  theme_minimal()+ 
+	theme(text = element_text(size = 17),
+	axis.text.x = element_text(angle = 90, hjust = 1))
+```
+
+```{r fig4, fig.cap="Microbiome composition: phylum level"}
+(P_Phyl)
+```
+
+Range of abundance values
+Illumina
+```{r}
+tapply(Tax_Phyll$Abundance_r,Tax_Phyll$Phylum,mean)
+range(Tax_Phyll[Tax_Phyll$Phylum=='Pseudomonadota',]$Abundance_r)
+range(Tax_Phyll[Tax_Phyll$Phylum=='Bacteroidota',]$Abundance_r)
+```
+
+Nanopore
+```{r}
+tapply(Tax_Phyl2$Abundance_r,Tax_Phyl2$Phylum,mean)
+range(Tax_Phyl2[Tax_Phyl2$Phylum=='Pseudomonadota',]$Abundance_r)
+range(Tax_Phyl2[Tax_Phyl2$Phylum=='Bacteroidota',]$Abundance_r)
+```
+
+# Bacterial composition: class level
+
+Adjusting the dataset to class level
+Illumina
+```{r}
+Tax_Data1[Tax_Data1$Class=="c__Incertae_Sedis",]$Class<-'p__NB1_j_Inc_Sed'
+
+Tax_Class1<- aggregate(Tax_Data1[,2:21],by=list(Class=Tax_Data1$Class), sum)
+Tax_Class1$Class<-substr(Tax_Class1$Class,4,40)
+
+Tax_Class1<-data.frame(t(Tax_Class1))
+colnames(Tax_Class1)<-Tax_Class1[1,]
+Tax_Class1<-Tax_Class1[2:21,]
+Tax_Class1$month<-substr(rownames(Tax_Class1),3,10)
+Tax_Class1$Sample_ID<-rownames(Tax_Class1)
+Tax_Class1$Sample_ID<-paste0(rep(1:5,4),'_',rep(c('Feb','Mar','Apr','May'),each=5))
+
+Tax_Cla1<- gather(Tax_Class1,Class,
+                  Abundance,Acidimicrobiia:NB1_j_Inc_Sed, factor_key=TRUE)
+Tax_Cla1$Abundance_r<-round(as.numeric(Tax_Cla1$Abundance),4)
+```
+
+Nanopore
+```{r}
+Tax_Data2[Tax_Data2$Class=="c__Incertae_Sedis",]$Class<-'p__Marinimicrobia_inc._sed.'
+
+Tax_Class2<- aggregate(Tax_Data2[,2:21],by=list(Class=Tax_Data2$Class), sum)
+Tax_Class2$Class<-substr(Tax_Class2$Class,4,40)
+
+Tax_Class2<-data.frame(t(Tax_Class2))
+colnames(Tax_Class2)<-Tax_Class2[1,]
+Tax_Class2<-Tax_Class2[2:21,]
+Tax_Class2$month<-substr(rownames(Tax_Class2),3,10)
+Tax_Class2$Sample_ID<-rownames(Tax_Class2)
+Tax_Class2$Sample_ID<-paste0(rep(1:5,4),'_',rep(c('Feb','Mar','Apr','May'),each=5))
+
+Tax_Cla2<- gather(Tax_Class2,Class,Abundance,
+                  Alphaproteobacteria:Marinimicrobia_inc._sed., factor_key=TRUE)
+Tax_Cla2$Abundance_r<-round(as.numeric(Tax_Cla2$Abundance),4)
+```
+
+Filtering only 10 orders with the highest abundance
+```{r}
+Part<-names(sort(tapply(as.numeric(Tax_Cla1$Abundance),Tax_Cla1$Class,mean)))[4:13]
+Tax_Cla1$Class_N<-as.character(Tax_Cla1$Class)
+Tax_Cla1[!(Tax_Cla1$Class_N %in% Part),]$Class_N<-'Others'
+Tax_Cla1$platform<-'Illumina'
+
+Part<-names(sort(tapply(as.numeric(Tax_Cla2$Abundance),Tax_Cla2$Class,mean)))[8:17]
+Tax_Cla2$Class_N<-as.character(Tax_Cla2$Class)
+Tax_Cla2[!(Tax_Cla2$Class_N %in% Part),]$Class_N<-'Others'
+Tax_Cla2$platform<-'Nanopore'
+```
+
+Combining datasets
+```{r}
+Tax_Cla<-rbind(Tax_Cla1,Tax_Cla2)
+
+Tax_Cla_New<-aggregate(Tax_Cla$Abundance_r,list(month=Tax_Cla$month,
+			Class=Tax_Cla$Class_N,platform=Tax_Cla$platform),mean)
+
+Tax_Cla_New$month<-factor(Tax_Cla_New$month,levels=c('February','March','April','May'))
+Tax_Cla_New$Class<-factor(Tax_Cla_New$Class,
+	levels = c('Others','Desulfuromonadia','Polyangiia','Bacteriovoracia',
+		'Cyanobacteriia','Gracilibacteria','Campylobacteria',
+		'Verrucomicrobiia','Alphaproteobacteria','Bacteroidia',
+		'Gammaproteobacteria'))
+sort(tapply(Tax_Cla_New$x,Tax_Cla_New$Class,mean))
+```
+
+Figure of bacterial compositon at class level
+```{r}
+P_Cla<-ggplot(Tax_Cla_New,aes(x = month, y = x, fill = Class)) +
+  geom_bar(position = "fill", stat = "identity") +
+  scale_fill_manual(values = c("#332288","#117733","#CC6677","#DDCC77","#888888",
+		"#6699CC","#882255","#999933","#44AA99","#AA4499","#88CCEE"
+		)) +
+  labs(title= 'C)', x= 'Month')+
+	ylab('')+
+  theme_minimal()+ 
+	theme(axis.text.x = element_text(vjust = 0.5, hjust=1))+
+	facet_wrap(~platform)+ 
+	theme(text = element_text(size = 17),
+	axis.text.x = element_text(angle = 90, hjust = 1))
+```
+
+```{r fig5, fig.cap="Microbiome composition: class level"}
+P_Cla
+```
+
+Range of abundance values
+Illumina
+```{r}
+tapply(Tax_Cla1$Abundance_r,Tax_Cla1$Class,mean)
+range(Tax_Cla1[Tax_Cla1$Class=='Gammaproteobacteria',]$Abundance_r)
+range(Tax_Cla1[Tax_Cla1$Class=='Bacteroidia',]$Abundance_r)
+range(Tax_Cla1[Tax_Cla1$Class=='Alphaproteobacteria',]$Abundance_r)
+```
+
+Nanopore
+```{r}
+tapply(Tax_Cla2$Abundance_r,Tax_Cla2$Class,mean)
+range(Tax_Cla2[Tax_Cla2$Class=='Gammaproteobacteria',]$Abundance_r)
+range(Tax_Cla2[Tax_Cla2$Class=='Bacteroidia',]$Abundance_r)
+range(Tax_Cla2[Tax_Cla2$Class=='Alphaproteobacteria',]$Abundance_r)
+```
+
+# Microbiome composition: order level
+
+Exploration of orders in most abundant groups
+```{r}
+sort(unique(Tax_Data1[Tax_Data1$Phylum=="p__Pseudomonadota",]$Order))
+sort(unique(Tax_Data1[Tax_Data1$Phylum=="p__Pseudomonadota",]$Class))
+
+sort(unique(Tax_Data1[Tax_Data1$Phylum=="p__Bacteroidota",]$Order))
+sort(unique(Tax_Data1[Tax_Data1$Phylum=="p__Bacteroidota",]$Class))
+```
+
+Adjusting the dataset to order level
+Illumina
+```{r}
+Tax_Data1[Tax_Data1$Order=="o__Incertae_Sedis",]$Order<-
+				c('c__Gracilibacteria_Inc_Sed','p__NB1_j_Inc_Sed')
+
+Tax_Order1<- aggregate(Tax_Data1[,2:21],by=list(Order=Tax_Data1$Order), sum)
+Tax_Order1$Order<-substr(Tax_Order1$Order,4,40)
+
+Tax_Order1<-data.frame(t(Tax_Order1))
+colnames(Tax_Order1)<-Tax_Order1[1,]
+Tax_Order1<-Tax_Order1[2:21,]
+Tax_Order1$month<-substr(rownames(Tax_Order1),3,10)
+Tax_Order1$Sample_ID<-rownames(Tax_Order1)
+Tax_Order1$Sample_ID<-paste0(rep(1:5,4),'_',rep(c('Feb','Mar','Apr','May'),each=5))
+
+Tax_Ord1<- gather(Tax_Order1,Order,Abundance,
+                  Gracilibacteria_Inc_Sed:NB1_j_Inc_Sed, factor_key=TRUE)
+Tax_Ord1$Abundance_r<-round(as.numeric(Tax_Ord1$Abundance),4)
+```
+
+Nanopore
+```{r}
+Tax_Data2[Tax_Data2$Order=="o__Incertae_Sedis",]$Order<-c('c__OM190_inc._sed.',
+			'c__Gracilibacteria_inc._sed.','p__Marinimicrobia_inc._sed.')
+
+Tax_Order2<- aggregate(Tax_Data2[,2:21],by=list(Order=Tax_Data2$Order), sum)
+Tax_Order2$Order<-substr(Tax_Order2$Order,4,40)
+
+Tax_Order2<-data.frame(t(Tax_Order2))
+colnames(Tax_Order2)<-Tax_Order2[1,]
+Tax_Order2<-Tax_Order2[2:21,]
+Tax_Order2$month<-substr(rownames(Tax_Order2),3,10)
+Tax_Order2$Sample_ID<-rownames(Tax_Order2)
+Tax_Order2$Sample_ID<-paste0(rep(1:5,4),'_',rep(c('Feb','Mar','Apr','May'),each=5))
+
+Tax_Ord2<- gather(Tax_Order2,Order,Abundance,
+                  Gracilibacteria_inc._sed.:Marinimicrobia_inc._sed., factor_key=TRUE)
+Tax_Ord2$Abundance_r<-round(as.numeric(Tax_Ord2$Abundance),4)
+```
+
+Filtering only 10 orders with the highest abundance
+```{r}
+Part<-names(sort(tapply(as.numeric(Tax_Ord1$Abundance),Tax_Ord1$Order,mean)))[28:36]
+Tax_Ord1$Order_N<-as.character(Tax_Ord1$Order)
+Tax_Ord1[!(Tax_Ord1$Order_N %in% Part),]$Order_N<-'Others'
+Tax_Ord1$platform<-'Illumina'
+
+Part<-names(sort(tapply(as.numeric(Tax_Ord2$Abundance),Tax_Ord2$Order,mean)))[33:41]
+Tax_Ord2$Order_N<-as.character(Tax_Ord2$Order)
+Tax_Ord2[!(Tax_Ord2$Order_N %in% Part),]$Order_N<-'Others'
+Tax_Ord2$platform<-'Nanopore'
+```
+
+Combining datasets
+```{r}
+Tax_Ord<-rbind(Tax_Ord1,Tax_Ord2)
+
+Tax_Ord_New<-aggregate(Tax_Ord$Abundance_r,list(month=Tax_Ord$month,
+			Order=Tax_Ord$Order_N,platform=Tax_Ord$platform),mean)
+
+Tax_Ord_New[Tax_Ord_New$Order=='Gracilibacteria_inc._sed.',]$Order<-
+  'Gracilibacteria inc. sed.'
+
+Tax_Ord_New$month<-factor(Tax_Ord_New$month,levels=c('February','March','April','May'))
+Tax_Ord_New$Order<-factor(Tax_Ord_New$Order,
+	levels = c('Others','Gracilibacteria inc. sed.','Hyphomicrobiales',
+		'Chitinophagales','Campylobacterales','Beggiatoales',
+		'Verrucomicrobiales','Enterobacterales','Ectothiorhodospirales',
+		'Rhodobacterales','Flavobacteriales','Cardiobacteriales'))
+
+sort(tapply(Tax_Ord_New$x,Tax_Ord_New$Order,mean))
+```
+
+Figure of bacterial compositon at order level
+```{r}
+P_Ord<-ggplot(Tax_Ord_New,aes(x = month, y = x, fill = Order)) +
+  geom_bar(position = "fill", stat = "identity") +
+  scale_fill_manual(values = c("#DDCC77","#CC6677","#117733","#332288",
+		'#993B3B',"#888888","#88CCEE","#AA4499","#44AA99","#999933",
+		"#882255","#6699CC")) +
+  labs(title= 'B)', x= 'Month')+
+	ylab('')+
+  theme_minimal()+ 
+	theme(axis.text.x = element_text(vjust = 0.5, hjust=1))+
+	facet_wrap(~platform)+ 
+	theme(text = element_text(size = 17),
+	axis.text.x = element_text(angle = 90, hjust = 1))
+```
+
+Combined figure
+
+```{r fig6, fig.cap="Microbiome composition: order level"}
+P_Ord
+```
+
+Exploration of mean abundance for individual groups
+```{r}
+tapply(Tax_Ord1$Abundance_r,Tax_Ord1$Order,mean)
+tapply(Tax_Ord2$Abundance_r,Tax_Ord2$Order,mean)
+```
+
+# Adjustment of dataset to genus level
+
+Illumina
+```{r}
+Tax_Data1$Genus_N<-paste0(Tax_Data1$Genus,'_',Tax_Data1$SampleID)
+
+Tax_Data1[Tax_Data1$Genus_N=='g__Incertae_Sedis_sp1',]$Genus_N<-
+  'g__Cardiobacteriaceae inc. sed._sp1'
+Tax_Data1[Tax_Data1$Genus_N=="g__NS10_marine_group_sp6",]$Genus_N<-
+  'g__Cryomorphaceae NS10 marine group_sp1'
+Tax_Data1[Tax_Data1$Genus_N=="g__Incertae_Sedis_sp3",]$Genus_N<-
+  'g__Ectothiorhodospiraceae inc. sed._sp1'
+Tax_Data1[Tax_Data1$Genus_N=="g__Incertae_Sedis_sp11",]$Genus_N<-
+  'g__Flavobacteriaceae inc. sed._sp1'
+Tax_Data1[Tax_Data1$Genus_N=="g__Incertae_Sedis_sp8",]$Genus_N<-
+  'g__Flavobacteriales NS9 inc. sed._sp1'
+Tax_Data1[Tax_Data1$Genus_N=="g__Incertae_Sedis_sp10",]$Genus_N<-
+  'g__Rhizobiaceae inc. sed._sp1'
+
+Tax_Genus1<- aggregate(Tax_Data1[,2:21],by=list(Genus=Tax_Data1$Genus_N), sum)
+Tax_Genus1$Genus<-substr(Tax_Genus1$Genus,4,40)
+```
+
+Nanopore
+```{r}
+Tax_Data2$Genus_N<-paste0(Tax_Data2$Genus,'_',Tax_Data2$SampleID)
+
+Tax_Data2[Tax_Data2$Genus_N=='g__Incertae_Sedis_sp1',]$Genus_N<-
+  'g__Cardiobacteriaceae inc. sed._sp1'
+Tax_Data2[Tax_Data2$Genus_N=="g__NS10_marine_group_sp6",]$Genus_N<-
+  'g__Cryomorphaceae NS10 marine group_sp1'
+Tax_Data2[Tax_Data2$Genus_N=="g__Incertae_Sedis_sp3",]$Genus_N<-
+  'g__Ectothiorhodospiraceae inc. sed._sp1'
+Tax_Data2[Tax_Data2$Genus_N=="g__Incertae_Sedis_sp11",]$Genus_N<-
+  'g__Flavobacteriaceae inc. sed._sp1'
+Tax_Data2[Tax_Data2$Genus_N=="g__Incertae_Sedis_sp8",]$Genus_N<-
+  'g__Flavobacteriales NS9 inc. sed._sp1'
+Tax_Data2[Tax_Data2$Genus_N=="g__Incertae_Sedis_sp10",]$Genus_N<-
+  'g__Rhizobiaceae inc. sed._sp1'
+
+Tax_Genus2<- aggregate(Tax_Data2[,2:21],by=list(Genus=Tax_Data2$Genus_N), sum)
+Tax_Genus2$Genus<-substr(Tax_Genus2$Genus,4,40)
+```
+
+Tidying the data set
+Illumina
+```{r}
+Tax_Genus1<-data.frame(t(Tax_Genus1))
+colnames(Tax_Genus1)<-Tax_Genus1[1,]
+Tax_Genus1<-Tax_Genus1[2:21,]
+Tax_Genus1$month<-substr(rownames(Tax_Genus1),3,10)
+Tax_Genus1$Sample_ID<-rownames(Tax_Genus1)
+Tax_Genus1$Sample_ID<-paste0(rep(1:5,4),'_',rep(c('Feb','Mar','Apr','May'),each=5))
+
+Tax_Gen1<- gather(Tax_Genus1,Genus,Abundance,Acinetobacter_sp196:Zobellia_sp171, factor_key=TRUE)
+Tax_Gen1$Abundance_r<-round(as.numeric(Tax_Gen1$Abundance),4)
+```
+
+Nanopore
+```{r}
+Tax_Genus2<-data.frame(t(Tax_Genus2))
+colnames(Tax_Genus2)<-Tax_Genus2[1,]
+Tax_Genus2<-Tax_Genus2[2:21,]
+Tax_Genus2$month<-substr(rownames(Tax_Genus2),3,10)
+Tax_Genus2$Sample_ID<-rownames(Tax_Genus2)
+Tax_Genus2$Sample_ID<-paste0(rep(1:5,4),'_',rep(c('Feb','Mar','Apr','May'),each=5))
+
+Tax_Gen2<- gather(Tax_Genus2,Genus,Abundance,Acinetobacter_sp196:Yoonia_sp23, factor_key=TRUE)
+Tax_Gen2$Abundance_r<-round(as.numeric(Tax_Gen2$Abundance),2)
+```
+
+Filtering only 10 genus with the highest abundance
+```{r}
+Part<-names(sort(tapply(as.numeric(Tax_Gen1$Abundance),Tax_Gen1$Genus,mean)))[124:132]
+Tax_Gen1$Genus_N<-as.character(Tax_Gen1$Genus)
+Tax_Gen1[!(Tax_Gen1$Genus_N %in% Part),]$Genus_N<-'Others'
+Tax_Gen1$platform<-'Illumina'
+
+Part<-names(sort(tapply(as.numeric(Tax_Gen2$Abundance),Tax_Gen2$Genus,mean)))[126:134]
+Tax_Gen2$Genus_N<-as.character(Tax_Gen2$Genus)
+Tax_Gen2[!(Tax_Gen2$Genus_N %in% Part),]$Genus_N<-'Others'
+Tax_Gen2$platform<-'Nanopore'
+```
+
+Combining datasets
+```{r}
+Tax_Gen<-rbind(Tax_Gen1,Tax_Gen2)
+
+Tax_Gen_New<-aggregate(Tax_Gen$Abundance_r,list(month=Tax_Gen$month,
+			Genus=Tax_Gen$Genus_N,platform=Tax_Gen$platform),mean)
+```
+
+Tidying the dataset
+```{r}
+Tax_Gen_New1<-aggregate(Tax_Gen$Abundance_r,list(month=Tax_Gen$month,Sample=Tax_Gen$Sample_ID,
+			Genus=Tax_Gen$Genus_N,platform=Tax_Gen$platform),mean)
+
+New_Illum<-Tax_Gen_New1[Tax_Gen_New1$platform=='Illumina',]
+New_Nan<-Tax_Gen_New1[Tax_Gen_New1$platform=='Nanopore',]
+```
+
+# Venn diagrams: platforms
+
+```{r}
+Tax_Phylum1<- aggregate(Tax_Data1[,2:21],by=list(Phylum=Tax_Data1$Phylum), sum)
+Tax_Genus1<- aggregate(Tax_Data1[,2:21],by=list(Genus=Tax_Data1$Genus_N), sum)
+Ill_Phyl<-substr(Tax_Phylum1$Phylum,4,30)
+Ill_Gen<-substr(Tax_Genus1$Genus,4,30)
+
+Tax_Phylum2<- aggregate(Tax_Data2[,2:21],by=list(Phylum=Tax_Data2$Phylum), sum)
+Tax_Genus2<- aggregate(Tax_Data2[,2:21],by=list(Genus=Tax_Data2$Genus_N), sum)
+Nan_Phyl<-substr(Tax_Phylum2$Phylum,4,20)
+Nan_Gen<-substr(Tax_Genus2$Genus,4,30)
+```
+
+Calculate abundance
+```{r}
+Tax_Gen_Il<-aggregate(as.numeric(Tax_Gen1$Abundance),list(Genus=Tax_Gen1$Genus),mean)
+colnames(Tax_Gen_Il)[2]<-'Illumina'
+Tax_Gen_Na<-aggregate(as.numeric(Tax_Gen2$Abundance),list(Genus=Tax_Gen2$Genus),mean)
+colnames(Tax_Gen_Na)[2]<-'Nanopore'
+```
+
+Merging of datasets
+```{r}
+Tax_Gen_O<-merge(Tax_Gen_Il,Tax_Gen_Na,by='Genus',all=TRUE)
+Tax_Gen_O[is.na(Tax_Gen_O)]<-0
+Tax_Gen_O$Overall_Abun<-rowMeans(Tax_Gen_O[,2:3])
+```
+
+Calculation of abundance for shared genera
+```{r}
+x <- list(Illumina = Ill_Gen, Nanopore = Nan_Gen)
+ItemsList <- gplots::venn(x, show.plot = FALSE)
+
+Abun_list<-attributes(ItemsList)$intersections$`Illumina:Nanopore`
+sum(Tax_Gen_O[Tax_Gen_O$Genus %in% Abun_list,]$Overall_Abun)
+
+Tax_Gen_O$Genus_N<-Tax_Gen_O$Genus
+Tax_Gen_O$Genus<-sub("_s[^_]+$", "", as.vector(Tax_Gen_O$Genus))
+Tax_Gen_O$SampleID<-paste0('s',sub(".*_s", "", as.vector(Tax_Gen_O$Genus_N)))
+```
+
+Figure of venn diaggram for platforms
+```{r}
+Venn_plat<-ggvenn(x,fill_color = c("#D55E00","#0072B2"),stroke_size = 0.5,
+                  fill_alpha = 0.8,text_size = 5.5,
+	show_percentage=FALSE,set_name_size = 0)+
+	ggplot2::annotate(geom="text",x=0.06, y=-0.2,label="98.6 %",size = 5)+
+	ggplot2::theme(text = element_text(size = 8),
+		legend.position = "none",
+		plot.title = element_blank())
+```
+
+```{r fig7, fig.cap="Venn diagram: platforms"}
+Venn_plat <- Venn_plat + theme(plot.tag = element_text(size = 16, face = "plain"))
+
+Venn_plat  +
+  plot_annotation(tag_levels = list(c("A)")))
+```
+
+# Venn diagram: Comparison of months
+
+```{r}
+Ill_Feb<-Tax_Genus1[,c(1:6)][apply(Tax_Genus1[,c(2:6)],1,sum)>0,]
+Ill_Mar<-Tax_Genus1[,c(1,7:11)][apply(Tax_Genus1[,c(7:11)],1,sum)>0,]
+Ill_Apr<-Tax_Genus1[,c(1,12:16)][apply(Tax_Genus1[,c(12:16)],1,sum)>0,]
+Ill_May<-Tax_Genus1[,c(1,17:21)][apply(Tax_Genus1[,c(17:21)],1,sum)>0,]
+
+Nan_Feb<-Tax_Genus2[,c(1:6)][apply(Tax_Genus2[,c(2:6)],1,sum)>0,]
+Nan_Mar<-Tax_Genus2[,c(1,7:11)][apply(Tax_Genus2[,c(7:11)],1,sum)>0,]
+Nan_Apr<-Tax_Genus2[,c(1,12:16)][apply(Tax_Genus2[,c(12:16)],1,sum)>0,]
+Nan_May<-Tax_Genus2[,c(1,17:21)][apply(Tax_Genus2[,c(17:21)],1,sum)>0,]
+```
+
+Calculation of abundance
+```{r}
+Tax_Gen_I<-aggregate(as.numeric(Tax_Gen1$Abundance),list(Genus=Tax_Gen1$Genus),mean)
+colnames(Tax_Gen_I)[2]<-'Illumina'
+Tax_Gen_N<-aggregate(as.numeric(Tax_Gen2$Abundance),list(Genus=Tax_Gen2$Genus),mean)
+colnames(Tax_Gen_N)[2]<-'Nanopore'
+```
+
+Illumina
+```{r}
+Illum <- list(February=Ill_Feb$Genus,March=Ill_Mar$Genus,April=Ill_Apr$Genus,
+		May=Ill_May$Genus)
+
+ItemsList <- gplots::venn(Illum, show.plot = FALSE)
+Abun_list<-attributes(ItemsList)$intersections$`February:March:April:May`
+Abun_list<-substr(Abun_list,4,30)
+```
+
+Nanopore
+```{r}
+Nanop <- list(February=Nan_Feb$Genus,March=Nan_Mar$Genus,April=Nan_Apr$Genus,
+		May=Nan_May$Genus)
+
+ItemsList <- gplots::venn(Nanop, show.plot = FALSE)
+Abun_list<-attributes(ItemsList)$intersections$`February:March:April:May`
+Abun_list<-substr(Abun_list,4,30)
+```
+
+Figures of venn diagram for each platform separately
+```{r}
+P1<-ggvenn(Illum, 
+  fill_color = c("#CC6677","#DDCC77","#117733","#332288"),
+  stroke_size = 0.5,set_name_size = 2.8,fill_alpha = 0.5,
+	show_percentage=FALSE)+
+	ggplot2::ggtitle('A)  Illumina') +
+	ggplot2::annotate(geom="text",x=0.06, y=-0.85,label="99.3 %")
+
+P2<-ggvenn(Nanop, 
+  fill_color = c("#CC6677","#DDCC77","#117733","#332288"),
+  stroke_size = 0.5,set_name_size = 2.8,fill_alpha = 0.5,
+	show_percentage=FALSE)+
+	ggplot2::ggtitle('B)  Nanopore') +
+	ggplot2::annotate(geom="text",x=0.06, y=-0.85,label="99.5 %")
+```
+
+Both figures
+```{r fig8, fig.cap="Venn diagram: months"}
+(P1 | P2 )
+```
+
+# LDA and LefSe analysis
+
+Adjustment of data for analysis
+```{r}
+colnames(TAX1)[c(1)]<-c('Kingdom')
+Ill_phylo_filt_1 <- phyloseq(otu_table(Ill_atu_filt), TAX1, SAM1)
+
+colnames(TAX2)[c(1)]<-c('Kingdom')
+Nan_phylo_filt_1 <- phyloseq(otu_table(Nan_atu_filt), TAX2, SAM2)
+```
+
+LefSe analysis
+```{r}
+result_Illum <- run_lefse(Ill_phylo_filt_1,group='time', taxa_rank='Genus')
+result_Nano <- run_lefse(Nan_phylo_filt_1,group='time', taxa_rank='Genus')
+```
+
+Compile results into a single dataset
+```{r}
+LDA_Illu<-data.frame(Group=marker_table(result_Illum)$feature,
+                     Month=marker_table(result_Illum)$enrich_group,
+	LDA=marker_table(result_Illum)$ef_lda,Platform='Illumina')
+
+LDA_Nan<-data.frame(Group=marker_table(result_Nano)$feature,
+                    Month=marker_table(result_Nano)$enrich_group,
+	LDA=marker_table(result_Nano)$ef_lda,Platform='Nanopore')
+
+LDA<-rbind(LDA_Nan,LDA_Illu)
+```
+
+Filtering of groups with LDA scores higher than 4
+```{r}
+LDA_filt <- LDA[ave(LDA$LDA >= 4, LDA$Group, FUN = any), ]
+
+LDA_filt$Group<-substr(LDA_filt$Group,4,50)
+LDA_filt$Group<-factor(LDA_filt$Group,levels=c(sort(unique(LDA_filt$Group))))
+```
+
+Adjustment of dataset for plotting
+```{r}
+levels(LDA_filt$Group)[c(2:7,10:12)]<-c("Cardiobacteriaceae inc. sed.",
+	"Cyanobacteriia chloroplast inc. sed.","Cryomorphaceae inc. sed.",
+	"Ectothiorhodospiraceae inc. sed.","Flavobacteriaceae inc. sed.",
+	"Gracilibacteria inc. sed.","Cryomorphaceae NS10 marine group",
+	"Flavobacteriales NS9 inc. sed.","Rhizobiaceae inc. sed."
+	)
+	
+LDA_filt_compl <- LDA_filt %>%
+  complete(Group, Platform, fill = list(LDA = 0))
+```
+
+Figure of LefSe analysis
+```{r}
+LefSe<-ggplot(LDA_filt_compl, aes(LDA, Group, fill = Platform)) +
+  geom_bar(stat = "identity", position = position_dodge(width = 0.85), width = 0.85) +
+  scale_fill_manual(values = c("#D55E00", "#0072B2")) +
+  labs(y = '', x = 'LDA score [log10]') +
+  theme_minimal() +
+  theme(text = element_text(size = 15)) +
+  geom_vline(xintercept = 4, linetype = "dashed") +
+  scale_y_discrete(labels = c(
+	expression(italic("Arcobacter")),
+	expression(italic("Cardiobacteriaceae inc. sed.")),
+      expression("Cyanobacteriia chloroplast " * italic("inc. sed.")),
+	expression(italic("Cryomorphaceae inc. sed.")),
+	expression(italic("Ectothiorhodospiraceae inc. sed.")),
+	expression(italic("Flavobacteriaceae inc. sed.")),
+	expression(italic("Gracilibacteria inc. sed.")),
+	expression(italic("Halocynthiibacter")),
+	expression(italic("Leucothrix")),
+      expression(italic("Cryomorphaceae") * " NS10 marine group"),
+      expression("Flavobacteriales NS9 " * italic("inc. sed.")),
+	expression(italic("Rhizobiaceae inc. sed.")),
+	expression(italic("Rubritalea")),
+	expression(italic("Ruegeria")),
+	expression(italic("Salinimicrobium")),
+	expression(italic("Tenacibaculum")),
+	expression(italic("Vibrio"))))
+```
+
+The final figure together with venn diagram of platforms
+```{r fig9, fig.cap="LefSe analysis"}
+LefSe    <- LefSe + theme(plot.tag = element_text(size = 16, face = "plain"))
+
+(LefSe) + 
+  plot_annotation(tag_levels = list(c("B)")))
+```
+
+# Identification of pathogen-associated genera
+
+```{r}
+Detected<-sort(substr(unique(observation$Genus),4,25))
+```
+
+List of pathogen-associated genera
+```{r}
+Pathogens<-c('Acinetobacter','Aerococcus','Aeromonas','Aliivibrio','Aquaspirillum',
+		'Arcobacter','Carnobacterium','Chlamydia','Chryseobacterium',
+		'Citrobacter','Clostridium','Delftia','Edwardsiella','Enterobacter',
+		'Erysipelothrix','Escherichia','Flavobacterium','Flectobacillus',
+		'Francisella','Hafnia','Hahella','Halomonas','Janthinobacterium',
+		'Klebsiella','Lactococcus','Moritella','Mycobacterium','Mycoplasma',
+		'Nocardia','Pantoea','Pasteurella','Photobacterium','Piscirickettsia',
+		'Plesiomonas','Providencia','Pseudoalteromonas','Pseudomonas',
+		'Renibacterium','Salmonella','Serratia','Shewanella','Stenotrophomonas',
+		'Streptococcus','Tenacibaculum','Vagococcus','Vibrio','Weissella','Yersinia')
+```
+
+Matching detected genera to the list of fish pathogens
+```{r}
+pattern<- c(Pathogens[1]) 
+myStrings <- observation$Genus
+Det_Pathogens<-data.frame()
+
+Det_Pathogens<-observation[observation$Genus %in% c(myStrings[grepl(pattern, myStrings)]),]
+
+for (i in 2:48){
+	pattern<- c(Pathogens[i]) 
+	myStrings <- observation$Genus
+	if(length(myStrings[grepl(pattern, myStrings)])>0){
+	Part<-observation[observation$Genus %in% c(myStrings[grepl(pattern, myStrings)]),]
+	Det_Pathogens<-rbind(Det_Pathogens,Part)
+	}}
+
+Det_Pathogens$Genus_N<-substr(Det_Pathogens$Genus,4,20)
+```
+
+Matching the list of detected pathogens to abundance data at genus level
+```{r}
+Tax_Gen_New1<-aggregate(Tax_Gen$Abundance_r,list(Month=Tax_Gen$month,
+			Genus=Tax_Gen$Genus,platform=Tax_Gen$platform),mean)
+colnames(Tax_Gen_New1)[4]<-'mean'
+Tax_Gen_New2<-aggregate(Tax_Gen$Abundance_r,list(Month=Tax_Gen$month,
+			Genus=Tax_Gen$Genus,platform=Tax_Gen$platform),function(x) {sd(x)/sqrt(length(x))})
+colnames(Tax_Gen_New2)[4]<-'se'
+Tax_Gen_New<-merge(Tax_Gen_New1,Tax_Gen_New2,by=c('Month','Genus','platform'),all=TRUE)
+
+Tax_Gen_New$Genus_N<-sub("_s[^_]+$", "", as.vector(Tax_Gen_New$Genus))
+Tax_Gen_Pat<- Tax_Gen_New[Tax_Gen_New$Genus_N %in% c(Det_Pathogens$Genus_N),]
+
+sort(tapply(Tax_Gen_Pat$mean,Tax_Gen_Pat$Genus_N,sum))
+Tax_Gen_Pat1<-Tax_Gen_Pat[Tax_Gen_Pat$Genus_N %in% c('Tenacibaculum','Vibrio','Arcobacter'),]
+
+Tax_Gen_Pat1$Genus_N<-factor(Tax_Gen_Pat1$Genus_N,
+	levels = c('Tenacibaculum','Vibrio','Arcobacter'))
+Tax_Gen_Pat1$Month<-factor(Tax_Gen_Pat1$Month,
+	levels = c('February','March','April','May'))
+```
+
+Testing of differences in abundance between months
+```{r}
+Abun<-aggregate(Tax_Gen$Abundance_r,list(Month=Tax_Gen$month,sample=Tax_Gen$Sample_ID,
+			Genus=Tax_Gen$Genus,platform=Tax_Gen$platform),mean)
+Abun$Genus_N<-sub("_s[^_]+$", "", as.vector(Abun$Genus))
+Abun_Pat<- Abun[Abun$Genus_N %in% c(Det_Pathogens$Genus_N),]
+Abun_Pat1<-Abun_Pat[Abun_Pat$Genus_N %in% c('Tenacibaculum','Vibrio','Arcobacter'),]
+
+Abun_Pat1$Devide<-paste(Abun_Pat1$Genus_N,Abun_Pat1$platform)
+
+for(i in 1:length(unique(Abun_Pat1$Devide))){
+	A<-Abun_Pat1[Abun_Pat1$Devide %in% unique(Abun_Pat1$Devide)[i],]
+	Krus<-kruskal.test(x ~ Month, data = A)
+	if(Krus$p.value<0.05){
+		print(unique(Abun_Pat1$Devide)[i])
+		print(pairwise.wilcox.test(A$x,A$Month,p.adjust.method = "BH"))
+			}else{
+		print('NO')}}
+
+Ill_Arc<-c('a','a','a','a')
+Ill_Ten<-c('a','b','ab','a')
+Ill_Vib<-c('ab','a','ab','b')
+Nan_Arc<-c('ab','a','b','a')
+Nan_Ten<-c('a','a','a','b')
+Nan_Vib<-c('a','a','a','a')
+```
+
+Preparation of data for plotting
+```{r}
+summary_data <- Tax_Gen_Pat1 %>%
+  group_by(platform,Genus_N,Month) %>%
+  summarise(mean = mean(mean, na.rm = TRUE),
+            se = se,.groups = 'drop')
+
+summary_data <- summary_data %>%
+	mutate(
+		Month = factor(Month, levels = c("February", "March", "April", "May")),
+		Genus_N = factor(Genus_N, levels = sort(unique(Genus_N))),
+		platform = factor(platform, levels = c("Illumina", "Nanopore")) ) %>%
+			arrange(platform, Genus_N, Month)
+
+label_data <- summary_data %>%
+  mutate(label = c(Ill_Ten,Ill_Vib,Ill_Arc,Nan_Ten,Nan_Vib,Nan_Arc),  
+         y = mean + se + 0.15) 
+```
+
+```{r}
+Abun_Pat1$Genus_N<-factor(Abun_Pat1$Genus_N,levels=levels(Tax_Gen_Pat1$Genus_N))
+Abun_Pat1$Month<-factor(Abun_Pat1$Month,levels=c('February','March','April','May'))
+
+Tax_Gen_Pat1$month<-factor(Tax_Gen_Pat1$Month,levels=c("February", "March", "April", "May"))
+label_data<-as.data.frame(label_data)
+label_data$Month<-factor(label_data$Month,levels=c("February", "March", "April", "May"))
+
+Illumina<-Tax_Gen_Pat1[Tax_Gen_Pat1$platform=='Illumina',]
+label_d<-label_data[label_data$platform=='Illumina',]
+Illumina$Genus_N<-factor(Illumina$Genus_N,levels=c('Arcobacter','Tenacibaculum','Vibrio'))
+label_data$Genus_N<-factor(Illumina$Genus_N,levels=c('Arcobacter','Tenacibaculum','Vibrio'))
+```
+
+Figure of pathogenic-genera abundance
+```{r fig10, fig.cap="Abundance of pathogenic genera"}
+ggplot(Illumina,aes(x =Genus_N, y = mean, color = Month)) +
+	geom_point(position=position_dodge(width = .5),size=4)  +
+	labs(x= 'Genus',y= 'Proportion of the total abundance')+
+	theme_minimal()+
+	geom_errorbar(aes(ymin=mean-se, ymax=mean+se), width=.4,
+                 position=position_dodge(.5)) + 
+	scale_color_manual(values = c("#CC6677","#DDCC77","#88CCEE","#117733")) +
+#	geom_point(data = Abun_Pat1, 
+#            mapping = aes(x = Genus_N, y = x, color = Month),
+#		position=position_dodge(width = .5),size=1)+
+	geom_text(data = label_d,
+            aes(x = Genus_N, y = mean+se+0.5, label = label,color=Month,group=Month),
+            position = position_dodge(width = 0.5),
+            inherit.aes = FALSE,
+            size = 5)+
+	theme(text = element_text(size = 17),
+		axis.text.x = element_text(face = "italic"))
+```
+
+# List of detected pathogen-associated genera
+
+Using the original, unfiltered dataset, the pathogen-associated genera were identified
+```{r}
+Sequen$Sample_ID<-rownames(Sequen)
+Count_Path<-Sequen[Sequen$Sample_ID %in% c(Det_Pathogens$SampleID),]
+
+Count_Path<-data.frame(t(Count_Path[,1:40]))
+Count_Path$Month<-c(rep('Feb',5),rep('Mar',5),rep('Apr',5),rep('May',5))
+Count_Path$Platform<-c(rep('Illumina',20),rep('Nanopore',20))
+Count_Path<- aggregate(Count_Path[,1:32],by=list(Platform=Count_Path$Platform), sum)
+
+Tax<-observation[observation$SampleID %in% colnames(Count_Path),]
+colnames(Count_Path)[2:33]<-Tax$Genus
+
+Count_Path_F<- gather(Count_Path,Genus,Count,g__Arcobacter:g__Plesiomonas, factor_key=TRUE)
+Count_Path_F$Genus<-substr(Count_Path_F$Genus,4,20)
+```
+
+Filtering for genera with at least 10 reads in all samples
+```{r}
+genus_platform <- with(Count_Path_F, tapply(Count, list(Genus, Platform), sum))
+keep_genera <- rownames(genus_platform)[apply(genus_platform >= 10, 1, any)]
+Count_Path_F3<-Count_Path_F[Count_Path_F$Genus %in% keep_genera, ]
+
+Count_Path_F4<- spread(Count_Path_F3,Platform,Count)
+Count_Path_F4
+```
+
+Number of detected genera
+```{r}
+nrow(Count_Path_F4)
+nrow(Count_Path_F4[Count_Path_F4$Illumina>10,])
+nrow(Count_Path_F4[Count_Path_F4$Nanopore>10,])
+```
+
+Calculation of overall abundance for pathogen-associated genera
+```{r}
+Selec<-Tax_Data[Tax_Data$SampleID %in% Tax$SampleID,]
+Selec_Ill<-Selec[,c(2:21)]
+rownames(Selec_Ill)<-Selec[,c(47)]
+Selec_Nan<-Selec[,c(22:41)]
+rownames(Selec_Nan)<-Selec[,c(47)]
+
+apply(Selec_Ill,1,mean)
+apply(Selec_Nan,1,mean)
+```
+
+# Species level identification of pathogens
+
+Loading data: Microbiome pathogens
+```{r}
+Pathog<-read.table("Sealice_Microbiome_Pathogens.csv",
+	header = TRUE,sep = ';',fill = TRUE,dec = ",",na.strings = "NA")
+```
+
+Calculation of abundance for individual pathogens and months
+
+```{r}
+Pathog<-Pathog[Pathog$Species %in% c('Acinetobacter johnsonii','Aeromonas sobria',
+		'Aliivibrio logei','Aliivibrio wodanis','Moritella marina',
+		'Pseudomonas fluorescens','Pseudomonas koreensis',
+		'Tenacibaculum dicentrarchi','Tenacibaculum maritimum',
+		'Tenacibaculum ovolyticum','Tenacibaculum soleae',
+		'Vibrio alginolyticus','Vibrio anguillarum','Vibrio splendidus',
+		'Vibrio tapetis'),]
+
+
+Patogen<-data.frame(Species=Pathog$Species,Ab_Total=apply
+                    (Pathog[,c(3:22)],1,mean),
+	Ab_Feb=apply(Pathog[,c(3:7)],1,mean),Ab_Mar=apply
+	(Pathog[,c(8:12)],1,mean),
+	Ab_Apr=apply(Pathog[,c(13:17)],1,mean),Ab_May=apply
+	(Pathog[,c(18:22)],1,mean))
+
+Patogen[Patogen$Ab_Feb==0,]$Ab_Feb<-NA
+Patogen[Patogen$Ab_Mar==0,]$Ab_Mar<-NA
+Patogen[Patogen$Ab_Apr==0,]$Ab_Apr<-NA
+Patogen[Patogen$Ab_May==0,]$Ab_May<-NA
+```
+
+```{r table1, results="asis", tab.cap="Abundance of putative pathogens"}
+knitr::kable(Patogen)
+```
+
+
