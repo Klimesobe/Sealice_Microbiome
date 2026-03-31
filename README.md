@@ -1,2 +1,2 @@
 # Sealice_Microbiome
-Code for the paper: Unlocking the Sea Lice Gut Microbiome (Lepeophtheirus salmonis): Insights from Combined Illumina and Nanopore Sequencing
+Code for the paper: Sea Lice (Lepeophtheirus salmonis) Harbour Putative Fish Pathogens: Insights from Illumina and Nanopore Sequencing
